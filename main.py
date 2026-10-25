@@ -20,10 +20,13 @@ logging.basicConfig(
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 class Ping(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
         self.end_headers()
         self.wfile.write(b"ok")
 
@@ -33,8 +36,13 @@ class Ping(BaseHTTPRequestHandler):
 
 def run_ping():
     port = int(os.environ.get("PORT", "10000"))
-    server = HTTPServer(("0.0.0.0", port), Ping)
-    server.serve_forever()
+
+    try:
+        server = HTTPServer(("0.0.0.0", port), Ping)
+        logging.info("Health server listening on port %s", port)
+        server.serve_forever()
+    except OSError:
+        logging.exception("Health server failed to start")
 
 
 async def start(
@@ -64,49 +72,74 @@ async def browser_test(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     message = await update.effective_message.reply_text(
-        "⏳ جاري اختبار المتصفح..."
+        "⏳ جاري تشغيل Chromium واختبار المتصفح..."
     )
+
+    browser = None
 
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(
+                headless=True,
+                timeout=60000,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
+            )
 
-            try:
-                page = await browser.new_page()
-                await page.goto(
-                    "https://www.playstation.com/",
-                    wait_until="domcontentloaded",
-                    timeout=60000,
-                )
-                title = await page.title()
-            finally:
-                await browser.close()
+            page = await browser.new_page()
 
-        await message.edit_text(
-            f"✅ المتصفح يعمل!\nعنوان الصفحة: {title}"
-        )
+            response = await page.goto(
+                "https://www.playstation.com/",
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
+
+            title = await page.title()
+            http_status = response.status if response else "غير معروف"
+
+            await message.edit_text(
+                "✅ تم تشغيل المتصفح بنجاح!\n\n"
+                f"عنوان الصفحة: {title}\n"
+                f"HTTP Status: {http_status}"
+            )
 
     except Exception as exc:
         logging.exception("Browser test failed")
-        await message.edit_text(
-            f"❌ فشل اختبار المتصفح: {type(exc).__name__}"
+
+        error_text = (
+            f"❌ فشل اختبار المتصفح\n"
+            f"نوع الخطأ: {type(exc).__name__}\n"
+            f"التفاصيل: {str(exc)[:1800]}"
         )
+
+        try:
+            await message.edit_text(error_text)
+        except Exception:
+            logging.exception("Could not send browser error to Telegram")
+
+    finally:
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception:
+                logging.exception("Failed to close Chromium")
 
 
 async def error_handler(
     update: object,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    error = context.error
-
-    if error:
+    if context.error:
         logging.error(
             "Telegram handler error: %s",
-            type(error).__name__,
+            context.error,
             exc_info=(
-                type(error),
-                error,
-                error.__traceback__,
+                type(context.error),
+                context.error,
+                context.error.__traceback__,
             ),
         )
 
