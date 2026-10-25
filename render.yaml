@@ -1,6 +1,6 @@
 services:
-  - type: web
+  - type: worker
     name: psn-username-bot
-    runtime: docker
-    plan: free
-    dockerfilePath: ./Dockerfile
+    runtime: python
+    buildCommand: pip install -r requirements.txt && playwright install --with-deps chromium
+    startCommand: python main.py
