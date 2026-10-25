@@ -1,1 +1,6 @@
-
+services:
+  - type: web
+    name: psn-username-bot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
